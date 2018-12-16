@@ -50,6 +50,7 @@ char *generatePassword(long seed) {
 }
 
 void bruteForceCrypt(const char encryptedPassword[]) {
+    clock_t start = clock();
     int success = 1;
 
     for (long seed = 0; seed < possibleCombinations; seed++) {
@@ -59,7 +60,9 @@ void bruteForceCrypt(const char encryptedPassword[]) {
 
         char *password = generatePassword(seed);
         if (strcmp(crypt(password, salt), encryptedPassword) == 0) {
-            printf("Success %s -> %s\n", encryptedPassword, password);
+            clock_t end = clock();
+            double executionTime = (double) (end - start) / CLOCKS_PER_SEC;
+            printf("Succeed to brute force! %s == %s (%lf seconds)\n", encryptedPassword, password, executionTime);
             success = 0;
         }
         free(password);

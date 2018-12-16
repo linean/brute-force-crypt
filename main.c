@@ -24,13 +24,7 @@ const char dictionary[] = {
 const int dictionarySize = sizeof(dictionary);
 const int maxPasswordLength = 4;
 
-long previousIndex;
 long possibleCombinations;
-
-char currentChar;
-char passwordBuffer[] = {};
-
-long i;
 
 long countPossibleCombinations(int passwordLength, int dictionarySize) {
     if (passwordLength < 1) return 0;
@@ -38,37 +32,43 @@ long countPossibleCombinations(int passwordLength, int dictionarySize) {
     return countPossibleCombinations(passwordLength - 1, dictionarySize) * dictionarySize + dictionarySize;
 }
 
-void bruteForceCrypt(char encryptedPassword[]) {
-    clock_t start = clock();
+char *generatePassword(long seed) {
+    long passwordIndex = 0;
+    long previousIndex = seed / dictionarySize - 1;
+    char *password = malloc(maxPasswordLength);
 
-    for (i = 0; i < possibleCombinations; i++) {
-        strcpy(passwordBuffer, "");
-        previousIndex = i / dictionarySize - 1;
+    while (previousIndex >= 0) {
+        password[passwordIndex++] = (previousIndex > (dictionarySize - 1)) ?
+                                    dictionary[previousIndex % dictionarySize] :
+                                    dictionary[previousIndex];
 
-        while (previousIndex >= 0) {
-            if (previousIndex > (dictionarySize - 1)) {
-                currentChar = dictionary[previousIndex % dictionarySize];
-            } else {
-                currentChar = dictionary[previousIndex];
-            }
-            previousIndex = previousIndex / dictionarySize - 1;
-            strcat(passwordBuffer, &currentChar);
-        }
-
-        currentChar = dictionary[i % dictionarySize];
-        strcat(passwordBuffer, &currentChar);
-
-        if (strcmp(crypt(passwordBuffer, salt), encryptedPassword) == 0) {
-            clock_t end = clock();
-            double executionTime = (double)(end - start) / CLOCKS_PER_SEC;
-            printf("Succeed to brute force! %s == %s (%ld iterations, %lf seconds)\n", encryptedPassword, passwordBuffer, i, executionTime);
-            return;
-        }
+        previousIndex = previousIndex / dictionarySize - 1;
     }
 
-    printf("Failed to brute force %s\n", encryptedPassword);
+    password[passwordIndex] = dictionary[seed % dictionarySize];
+    return password;
 }
 
+void bruteForceCrypt(const char encryptedPassword[]) {
+    int success = 1;
+
+    for (long seed = 0; seed < possibleCombinations; seed++) {
+        if (success == 0) {
+            break;
+        }
+
+        char *password = generatePassword(seed);
+        if (strcmp(crypt(password, salt), encryptedPassword) == 0) {
+            printf("Success %s -> %s\n", encryptedPassword, password);
+            success = 0;
+        }
+        free(password);
+    }
+
+    if (success != 0) {
+        printf("Failed to brute force %s\n", encryptedPassword);
+    }
+}
 
 /* gcc main.c -lcrypt -o main */
 int main() {
@@ -86,6 +86,7 @@ int main() {
     printf("Possible password combinations:%ld\n", possibleCombinations);
     printf("Brute forcing...\n");
 
+    bruteForceCrypt("121PRpnQMYV3k");   // a
     bruteForceCrypt("12lEFLUCRu9F6");   // uLA
     bruteForceCrypt("12pVin.zzdyWc");   // n0gA
     bruteForceCrypt("12FzdOhc/dsSY");   // PI3s

@@ -7,8 +7,8 @@
 #include <time.h>
 #include <mpi.h>
 
-# define TAG_CHUNK 1
-# define TAG_SUCCESS 2
+# define TAG_RESULT 1
+# define TAG_SUCCESS 3
 # define MASTER_ID 0
 
 const char salt[] = "123";
@@ -104,7 +104,7 @@ void configureMaster() {
 
     // Wait for results from slaves
     for (int i = 1; i <= slavesCount; i++) {
-        MPI_Recv(result, maxPasswordLength, MPI_CHAR, MPI_ANY_SOURCE, TAG_CHUNK, MPI_COMM_WORLD, &status);
+        MPI_Recv(result, maxPasswordLength, MPI_CHAR, MPI_ANY_SOURCE, TAG_RESULT, MPI_COMM_WORLD, &status);
 
         // If result was success close other slaves and finish
         if (strlen(result) > 0) {
@@ -138,7 +138,7 @@ void configureSlave(int slaveId) {
 
     // Brute force password, send result to master
     char *result = bruteForceCrypt(startSeed, endSeed);
-    MPI_Send(result, maxPasswordLength, MPI_CHAR, MASTER_ID, TAG_CHUNK, MPI_COMM_WORLD);
+    MPI_Send(result, maxPasswordLength, MPI_CHAR, MASTER_ID, TAG_RESULT, MPI_COMM_WORLD);
 }
 
 int main(int argc, char *argv[]) {

@@ -5,7 +5,11 @@
 #include <stdlib.h>
 #include <crypt.h>
 #include <time.h>
-#include <omp.h>
+#include <mpi.h>
+
+# define TAG_CHUNK 1
+# define TAG_SUCCESS 2
+# define MASTER_ID 0
 
 const char salt[] = "123";
 const char dictionary[] = {
@@ -27,9 +31,9 @@ const char dictionary[] = {
 const int dictionarySize = sizeof(dictionary);
 const int maxPasswordLength = 4;
 
-long possibleCombinations;
-
-struct crypt_data *cryptData = NULL;
+int emptyBuf;
+int slavesCount;
+char *encryptedPassword;
 
 long countPossibleCombinations(int passwordLength, int dictionarySize) {
     if (passwordLength < 1) return 0;
@@ -37,28 +41,10 @@ long countPossibleCombinations(int passwordLength, int dictionarySize) {
     return countPossibleCombinations(passwordLength - 1, dictionarySize) * dictionarySize + dictionarySize;
 }
 
-void initPossibleCombinations() {
-    possibleCombinations = countPossibleCombinations(maxPasswordLength, dictionarySize);
-}
-
-void initThreadSafeCryptData() {
-    if (cryptData == NULL) {
-        cryptData = malloc(sizeof(struct crypt_data) * (size_t) omp_get_max_threads());
-        for (int i = 0; i < omp_get_max_threads(); i++) {
-            struct crypt_data data = {.initialized = 0};
-            cryptData[i] = data;
-        }
-    }
-}
-
-char *threadSafeCrypt(char *password, const char *salt) {
-    return crypt_r(password, salt, &cryptData[omp_get_thread_num()]);
-}
-
 char *generatePassword(long seed) {
     long passwordIndex = 0;
     long previousIndex = seed / dictionarySize - 1;
-    char *password = malloc(maxPasswordLength);
+    char *password = calloc(maxPasswordLength, sizeof(char));
 
     while (previousIndex >= 0) {
         password[passwordIndex++] = (previousIndex > (dictionarySize - 1)) ?
@@ -72,60 +58,112 @@ char *generatePassword(long seed) {
     return password;
 }
 
-void bruteForceCrypt(const char encryptedPassword[]) {
-    clock_t start = clock();
-    int success = 1;
+char *bruteForceCrypt(long startSeed, long endSeed) {
+    int success;
+    MPI_Request request;
+    MPI_Status status;
+    MPI_Irecv(&emptyBuf, 1, MPI_INT, MPI_ANY_SOURCE, TAG_SUCCESS, MPI_COMM_WORLD, &request);
 
-#pragma omp parallel for shared(success)
-    for (long seed = 0; seed < possibleCombinations; seed++) {
-        if (success == 0) {
-            continue;
+    for (long seed = startSeed; seed < endSeed; seed++) {
+        // check if any other process has found a solution
+        MPI_Test(&request, &success, &status);
+        if (success != 0) {
+            break;
         }
 
         char *password = generatePassword(seed);
-        if (strcmp(threadSafeCrypt(password, salt), encryptedPassword) == 0) {
-            clock_t end = clock();
-            double executionTime = (double) (end - start) / CLOCKS_PER_SEC;
-            printf("Success! %s -> %s (%lf seconds)\n", encryptedPassword, password, executionTime);
-            success = 0;
+        if (strcmp(crypt(password, salt), encryptedPassword) == 0) {
+            return password;
         }
         free(password);
     }
 
-    if (success != 0) {
-        printf("Failed to brute force %s\n", encryptedPassword);
+    return "";
+}
+
+void sendSuccessToOthers(int successSlaveId) {
+    for (int slaveId = 1; slaveId <= slavesCount; slaveId++) {
+        if (slaveId != successSlaveId) {
+            MPI_Send(&emptyBuf, 1, MPI_INT, slaveId, TAG_SUCCESS, MPI_COMM_WORLD);
+        }
     }
 }
 
-/* gcc main.c -lcrypt -fopenmp -o main */
-int main() {
-//    printf("uLA - %s\n", crypt("uLA",salt));
-//    printf("n0gA - %s\n", crypt("n0gA",salt));
-//    printf("PI3s - %s\n", crypt("PI3s",salt));
-//    printf("uChO - %s\n", crypt("uChO",salt));
-//    printf("wAgA - %s\n", crypt("wAgA",salt));
-//    printf("5m0k - %s\n", crypt("5m0k",salt));
 
-    // Required initialization
-    initThreadSafeCryptData();
-    initPossibleCombinations();
+void configureMaster() {
+    double startTime = MPI_Wtime();
 
-    // Print some info about configuration
-    printf("Dictionary size:%d\n", dictionarySize);
-    printf("Max password length:%d\n", maxPasswordLength);
-    printf("Possible password combinations:%ld\n", possibleCombinations);
-    printf("Brute forcing...\n");
+    long possibleCombinations = countPossibleCombinations(maxPasswordLength, dictionarySize);
+    long chunk = possibleCombinations / slavesCount;
 
-    // Start test
-    bruteForceCrypt("121PRpnQMYV3k");   // a
-    bruteForceCrypt("12lEFLUCRu9F6");   // uLA
-    bruteForceCrypt("12pVin.zzdyWc");   // n0gA
-    bruteForceCrypt("12FzdOhc/dsSY");   // PI3s
-    bruteForceCrypt("12j73m9qVJcjw");   // uChO
-    bruteForceCrypt("12UeC5UlydX6A");   // wAgA
-    bruteForceCrypt("12FBySa5z4k22");   // 5m0k
+    // send chunk size to all slaves
+    MPI_Bcast(&chunk, 1, MPI_LONG, MASTER_ID, MPI_COMM_WORLD);
 
-    printf("Done\n");
-    free(cryptData);
-    return 0;
+    char result[maxPasswordLength];
+    MPI_Status status;
+
+    // Wait for results from slaves
+    for (int i = 1; i <= slavesCount; i++) {
+        MPI_Recv(result, maxPasswordLength, MPI_CHAR, MPI_ANY_SOURCE, TAG_CHUNK, MPI_COMM_WORLD, &status);
+
+        // If result was success close other slaves and finish
+        if (strlen(result) > 0) {
+            sendSuccessToOthers(status.MPI_SOURCE);
+            printf("Success! %s -> %s (%lf seconds, in slave: %d)\n",
+                   encryptedPassword,
+                   result,
+                   MPI_Wtime() - startTime,
+                   status.MPI_SOURCE
+            );
+            return;
+        }
+    }
+
+    printf("Failed to brute force %s\n", encryptedPassword);
+}
+
+
+void configureSlave(int slaveId) {
+    // Receive chunk size from master
+    long chunk;
+    MPI_Bcast(&chunk, 1, MPI_LONG, MASTER_ID, MPI_COMM_WORLD);
+
+    // calculate seed range for given slaveId
+    long startSeed = chunk * (slaveId - 1);
+    long endSeed = chunk * slaveId;
+
+    if (slaveId < slavesCount) {
+        endSeed = endSeed - 1;
+    }
+
+    // Brute force password, send result to master
+    char *result = bruteForceCrypt(startSeed, endSeed);
+    MPI_Send(result, maxPasswordLength, MPI_CHAR, MASTER_ID, TAG_CHUNK, MPI_COMM_WORLD);
+}
+
+int main(int argc, char *argv[]) {
+    MPI_Init(&argc, &argv);
+
+    int processId;
+    MPI_Comm_rank(MPI_COMM_WORLD, &processId);
+
+    int processCount;
+    MPI_Comm_size(MPI_COMM_WORLD, &processCount);
+
+    slavesCount = processCount - 1;
+    encryptedPassword = argv[1];
+
+    if (slavesCount < 1) {
+        MPI_Finalize();
+        return EXIT_FAILURE;
+    }
+
+    if (processId == MASTER_ID) {
+        configureMaster();
+    } else {
+        configureSlave(processId);
+    }
+
+    MPI_Finalize();
+    return EXIT_SUCCESS;
 }

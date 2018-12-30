@@ -3,5 +3,6 @@ project(prir_brute_force C)
 
 set(CMAKE_C_STANDARD 99)
 
-add_executable(prir_brute_force main.c)
+add_executable(prir_brute_force main.c test.c)
 target_link_libraries(prir_brute_force crypt)
+include_directories(/usr/include/mpi/)
